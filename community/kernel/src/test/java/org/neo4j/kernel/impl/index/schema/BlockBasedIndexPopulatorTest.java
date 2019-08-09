@@ -29,6 +29,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.Future;
+import java.util.function.LongPredicate;
 
 import org.neo4j.graphdb.mockfs.EphemeralFileSystemAbstraction;
 import org.neo4j.internal.kernel.api.schema.IndexProviderDescriptor;
@@ -42,7 +43,7 @@ import org.neo4j.kernel.configuration.Config;
 import org.neo4j.kernel.impl.index.schema.config.ConfiguredSpaceFillingCurveSettingsCache;
 import org.neo4j.kernel.impl.index.schema.config.IndexSpecificSpaceFillingCurveSettingsCache;
 import org.neo4j.memory.LocalMemoryTracker;
-import org.neo4j.memory.MemoryAllocationTracker;
+import org.neo4j.memory.ThreadSafePeakMemoryAllocationTracker;
 import org.neo4j.storageengine.api.schema.IndexDescriptorFactory;
 import org.neo4j.storageengine.api.schema.PopulationProgress;
 import org.neo4j.storageengine.api.schema.StoreIndexDescriptor;
@@ -58,6 +59,7 @@ import static org.neo4j.kernel.api.index.IndexDirectoryStructure.directoriesByPr
 import static org.neo4j.kernel.api.index.IndexProvider.Monitor.EMPTY;
 import static org.neo4j.kernel.impl.api.index.PhaseTracker.nullInstance;
 import static org.neo4j.kernel.impl.index.schema.BlockStorage.Monitor.NO_MONITOR;
+import static org.neo4j.kernel.impl.index.schema.ByteBufferFactory.heapBufferFactory;
 import static org.neo4j.test.OtherThreadExecutor.command;
 import static org.neo4j.test.Race.throwing;
 import static org.neo4j.values.storable.Values.stringValue;
@@ -96,8 +98,8 @@ public class BlockBasedIndexPopulatorTest
     public void shouldAwaitMergeToBeFullyAbortedBeforeLeavingCloseMethod() throws Exception
     {
         // given
-        TrappingMonitor monitor = new TrappingMonitor( false );
-        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( monitor, new LocalMemoryTracker() );
+        TrappingMonitor monitor = new TrappingMonitor( ignore -> false );
+        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( monitor );
         boolean closed = false;
         try
         {
@@ -127,11 +129,47 @@ public class BlockBasedIndexPopulatorTest
     }
 
     @Test
+    public void shouldHandleBeingAbortedWhileMerging() throws Exception
+    {
+        // given
+        TrappingMonitor monitor = new TrappingMonitor( numberOfBlocks -> numberOfBlocks == 2 );
+        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( monitor );
+        boolean closed = false;
+        try
+        {
+            populator.add( batchOfUpdates() );
+
+            // when starting to merge (in a separate thread)
+            Future<Object> mergeFuture = t2.execute( command( () -> populator.scanCompleted( nullInstance ) ) );
+            // and waiting for merge to get going
+            monitor.barrier.await();
+            monitor.barrier.release();
+            monitor.mergeFinishedBarrier.awaitUninterruptibly();
+            // calling close here should wait for the merge future, so that checking the merge future for "done" immediately afterwards must say true
+            Future<Object> closeFuture = t3.execute( command( () -> populator.close( false ) ) );
+            t3.get().waitUntilWaiting();
+            monitor.mergeFinishedBarrier.release();
+            closeFuture.get();
+            closed = true;
+
+            // then let's make sure scanComplete was cancelled, not throwing exception or anything.
+            mergeFuture.get();
+        }
+        finally
+        {
+            if ( !closed )
+            {
+                populator.close( false );
+            }
+        }
+    }
+
+    @Test
     public void shouldReportAccurateProgressThroughoutThePhases() throws Exception
     {
         // given
-        TrappingMonitor monitor = new TrappingMonitor( true );
-        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( monitor, new LocalMemoryTracker() );
+        TrappingMonitor monitor = new TrappingMonitor( numberOfBlocks -> numberOfBlocks == 1 );
+        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( monitor );
         try
         {
             populator.add( batchOfUpdates() );
@@ -159,7 +197,7 @@ public class BlockBasedIndexPopulatorTest
     public void shouldCorrectlyDecideToAwaitMergeDependingOnProgress() throws Throwable
     {
         // given
-        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( NO_MONITOR, new LocalMemoryTracker() );
+        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( NO_MONITOR );
         boolean closed = false;
         try
         {
@@ -189,8 +227,8 @@ public class BlockBasedIndexPopulatorTest
     public void shouldDeleteDirectoryOnDrop() throws Exception
     {
         // given
-        TrappingMonitor monitor = new TrappingMonitor( false );
-        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( monitor, new LocalMemoryTracker() );
+        TrappingMonitor monitor = new TrappingMonitor( ignore -> false );
+        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( monitor );
         boolean closed = false;
         try
         {
@@ -228,8 +266,9 @@ public class BlockBasedIndexPopulatorTest
     public void shouldDeallocateAllAllocatedMemoryOnClose() throws IndexEntryConflictException
     {
         // given
-        LocalMemoryTracker memoryTracker = new LocalMemoryTracker();
-        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( NO_MONITOR, memoryTracker );
+        ThreadSafePeakMemoryAllocationTracker memoryTracker = new ThreadSafePeakMemoryAllocationTracker( new LocalMemoryTracker() );
+        ByteBufferFactory bufferFactory = new ByteBufferFactory( () -> new UnsafeDirectByteBufferAllocator( memoryTracker ), 100 );
+        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( NO_MONITOR, bufferFactory );
         boolean closed = false;
         try
         {
@@ -239,14 +278,19 @@ public class BlockBasedIndexPopulatorTest
             int nextId = updates.size();
             externalUpdates( populator, nextId, nextId + 10 );
             nextId = nextId + 10;
+            long memoryBeforeScanCompleted = memoryTracker.usedDirectMemory();
             populator.scanCompleted( nullInstance );
             externalUpdates( populator, nextId, nextId + 10 );
 
             // then
-            assertTrue( "expected some memory to be in use", memoryTracker.usedDirectMemory() > 0 );
+            assertTrue( "expected some memory to have been temporarily allocated in scanCompleted",
+                    memoryTracker.peakMemoryUsage() > memoryBeforeScanCompleted );
             populator.close( true );
-            assertEquals( "expected all allocated memory to have been freed on close", 0, memoryTracker.usedDirectMemory() );
+            assertEquals( "expected all allocated memory to have been freed on close", memoryBeforeScanCompleted, memoryTracker.usedDirectMemory() );
             closed = true;
+
+            bufferFactory.close();
+            assertEquals( 0, memoryTracker.usedDirectMemory() );
         }
         finally
         {
@@ -261,8 +305,9 @@ public class BlockBasedIndexPopulatorTest
     public void shouldDeallocateAllAllocatedMemoryOnDrop() throws IndexEntryConflictException
     {
         // given
-        LocalMemoryTracker memoryTracker = new LocalMemoryTracker();
-        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( NO_MONITOR, memoryTracker );
+        ThreadSafePeakMemoryAllocationTracker memoryTracker = new ThreadSafePeakMemoryAllocationTracker( new LocalMemoryTracker() );
+        ByteBufferFactory bufferFactory = new ByteBufferFactory( () -> new UnsafeDirectByteBufferAllocator( memoryTracker ), 100 );
+        BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator = instantiatePopulator( NO_MONITOR, bufferFactory );
         boolean closed = false;
         try
         {
@@ -272,14 +317,19 @@ public class BlockBasedIndexPopulatorTest
             int nextId = updates.size();
             externalUpdates( populator, nextId, nextId + 10 );
             nextId = nextId + 10;
+            long memoryBeforeScanCompleted = memoryTracker.usedDirectMemory();
             populator.scanCompleted( nullInstance );
             externalUpdates( populator, nextId, nextId + 10 );
 
             // then
-            assertTrue( "expected some memory to be in use", memoryTracker.usedDirectMemory() > 0 );
+            assertTrue( "expected some memory to have been temporarily allocated in scanCompleted",
+                    memoryTracker.peakMemoryUsage() > memoryBeforeScanCompleted );
             populator.drop();
             closed = true;
-            assertEquals( "expected all allocated memory to have been freed on drop", 0, memoryTracker.usedDirectMemory() );
+            assertEquals( "expected all allocated memory to have been freed on drop", memoryBeforeScanCompleted, memoryTracker.usedDirectMemory() );
+
+            bufferFactory.close();
+            assertEquals( 0, memoryTracker.usedDirectMemory() );
         }
         finally
         {
@@ -302,7 +352,12 @@ public class BlockBasedIndexPopulatorTest
         }
     }
 
-    private BlockBasedIndexPopulator<GenericKey,NativeIndexValue> instantiatePopulator( BlockStorage.Monitor monitor, MemoryAllocationTracker memoryTracker )
+    private BlockBasedIndexPopulator<GenericKey,NativeIndexValue> instantiatePopulator( BlockStorage.Monitor monitor )
+    {
+        return instantiatePopulator( monitor, heapBufferFactory( 100 ) );
+    }
+
+    private BlockBasedIndexPopulator<GenericKey,NativeIndexValue> instantiatePopulator( BlockStorage.Monitor monitor, ByteBufferFactory bufferFactory )
     {
         Config config = Config.defaults();
         ConfiguredSpaceFillingCurveSettingsCache settingsCache = new ConfiguredSpaceFillingCurveSettingsCache( config );
@@ -310,7 +365,7 @@ public class BlockBasedIndexPopulatorTest
         GenericLayout layout = new GenericLayout( 1, spatialSettings );
         BlockBasedIndexPopulator<GenericKey,NativeIndexValue> populator =
                 new BlockBasedIndexPopulator<GenericKey,NativeIndexValue>( storage.pageCache(), fs, indexFile, layout, EMPTY,
-                        INDEX_DESCRIPTOR, spatialSettings, directoryStructure, dropAction, false, 100, 2, monitor, memoryTracker )
+                        INDEX_DESCRIPTOR, spatialSettings, directoryStructure, dropAction, false, bufferFactory, 2, monitor )
                 {
                     @Override
                     NativeIndexReader<GenericKey,NativeIndexValue> newReader()
@@ -341,11 +396,11 @@ public class BlockBasedIndexPopulatorTest
     {
         private final Barrier.Control barrier = new Barrier.Control();
         private final Barrier.Control mergeFinishedBarrier = new Barrier.Control();
-        private final boolean alsoTrapAfterMergeCompleted;
+        private final LongPredicate trapForMergeIterationFinished;
 
-        TrappingMonitor( boolean alsoTrapAfterMergeCompleted )
+        TrappingMonitor( LongPredicate trapForMergeIterationFinished )
         {
-            this.alsoTrapAfterMergeCompleted = alsoTrapAfterMergeCompleted;
+            this.trapForMergeIterationFinished = trapForMergeIterationFinished;
         }
 
         @Override
@@ -357,7 +412,7 @@ public class BlockBasedIndexPopulatorTest
         @Override
         public void mergeIterationFinished( long numberOfBlocksBefore, long numberOfBlocksAfter )
         {
-            if ( numberOfBlocksAfter == 1 && alsoTrapAfterMergeCompleted )
+            if ( trapForMergeIterationFinished.test( numberOfBlocksAfter ) )
             {
                 mergeFinishedBarrier.reached();
             }

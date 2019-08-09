@@ -29,7 +29,7 @@ case class CartesianProductPipe(lhs: Pipe, rhs: Pipe)
          rhsRow <- rhs.createResults(state))
       yield {
         val output = lhsRow.createClone()
-        output.mergeWith(rhsRow)
+        output.mergeWith(rhsRow, state.query)
         output
       }
   }

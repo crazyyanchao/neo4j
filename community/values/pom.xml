@@ -4,7 +4,7 @@
   <parent>
     <groupId>org.neo4j</groupId>
     <artifactId>parent</artifactId>
-    <version>3.5.5-SNAPSHOT</version>
+    <version>3.5.9-SNAPSHOT</version>
     <relativePath>../..</relativePath>
   </parent>
 
@@ -16,7 +16,7 @@
 
   <modelVersion>4.0.0</modelVersion>
   <artifactId>neo4j-values</artifactId>
-  <version>3.5.5-SNAPSHOT</version>
+  <version>3.5.9-SNAPSHOT</version>
 
   <packaging>jar</packaging>
   <name>Neo4j - Value</name>
@@ -81,11 +81,6 @@
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.commons</groupId>
-            <artifactId>commons-compress</artifactId>
-            <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>commons-codec</groupId>

@@ -3,14 +3,14 @@
   <parent>
     <groupId>org.neo4j</groupId>
     <artifactId>parent</artifactId>
-    <version>3.5.5-SNAPSHOT</version>
+    <version>3.5.9-SNAPSHOT</version>
     <relativePath>../..</relativePath>
   </parent>
 
   <modelVersion>4.0.0</modelVersion>
   <groupId>org.neo4j.app</groupId>
   <artifactId>neo4j-server</artifactId>
-  <version>3.5.5-SNAPSHOT</version>
+  <version>3.5.9-SNAPSHOT</version>
   <name>Neo4j - Server</name>
   <description>Standalone Neo4j server application.</description>
   <url>http://components.neo4j.org/${project.artifactId}/${project.version}</url>
@@ -22,7 +22,7 @@
     <licensing.prepend.text>licensing/notice-gpl-prefix.txt</licensing.prepend.text>
 
     <neo4j.version>${project.version}</neo4j.version>
-    <neo4j-browser.version>3.2.18</neo4j-browser.version>
+    <neo4j-browser.version>3.2.20</neo4j-browser.version>
 
     <neo4j-server.mainClass>org.neo4j.server.CommunityEntryPoint</neo4j-server.mainClass>
 
@@ -199,10 +199,6 @@
         <dependency>
             <groupId>org.glassfish.jaxb</groupId>
             <artifactId>jaxb-runtime</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.glassfish.jaxb</groupId>
-            <artifactId>jaxb-core</artifactId>
         </dependency>
         <dependency>
             <groupId>javax.xml.bind</groupId>

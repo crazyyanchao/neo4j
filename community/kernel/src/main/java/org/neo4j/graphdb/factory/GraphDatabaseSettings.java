@@ -78,10 +78,10 @@ import static org.neo4j.kernel.configuration.Settings.min;
 import static org.neo4j.kernel.configuration.Settings.optionsIgnoreCase;
 import static org.neo4j.kernel.configuration.Settings.optionsObeyCase;
 import static org.neo4j.kernel.configuration.Settings.pathSetting;
+import static org.neo4j.kernel.configuration.Settings.powerOf2;
 import static org.neo4j.kernel.configuration.Settings.range;
 import static org.neo4j.kernel.configuration.Settings.setting;
 import static org.neo4j.kernel.configuration.ssl.LegacySslPolicyConfig.LEGACY_POLICY_NAME;
-import static org.neo4j.util.Preconditions.checkArgument;
 
 /**
  * Settings for Neo4j.
@@ -413,6 +413,29 @@ public class GraphDatabaseSettings implements LoadableConfig
     @Internal
     public static final Setting<Integer> cypher_worker_count =
             setting( "unsupported.cypher.number_of_workers", INTEGER, "0" );
+
+    @Description( "Max number of recent queries to collect in the data collector module. Will round down to the" +
+            " nearest power of two. The default number (8192 query invocations) " +
+            " was chosen as a trade-off between getting a useful amount of queries, and not" +
+            " wasting too much heap. Even with a buffer full of unique queries, the estimated" +
+            " footprint lies in tens of MBs. If the buffer is full of cached queries, the" +
+            " retained size was measured to 265 kB. Setting this to 0 will disable data collection" +
+            " of queries completely." )
+    @Internal
+    public static final Setting<Integer> data_collector_max_recent_query_count =
+            buildSetting( "unsupported.datacollector.max_recent_query_count", INTEGER, "8192" )
+                    .constraint( min( 0 ) ).build();
+
+    @Description( "Sets the upper limit for how much of the query text that will be retained by the query collector." +
+            " For queries longer than the limit, only a prefix of size limit will be retained by the collector." +
+            " Lowering this value will reduce the memory footprint of collected query invocations under loads with" +
+            " many queries with long query texts, which could occur for generated queries. The downside is that" +
+            " on retrieving queries by `db.stats.retrieve`, queries longer than this max size would be returned" +
+            " incomplete. Setting this to 0 will completely drop query texts from the collected queries." )
+    @Internal
+    public static final Setting<Integer> data_collector_max_query_text_size =
+            buildSetting( "unsupported.datacollector.max_query_text_size", INTEGER, "10000" )
+                    .constraint( min( 0 ) ).build();
 
     @Description( "The maximum amount of time to wait for the database to become available, when " +
                   "starting a new transaction." )
@@ -1093,11 +1116,7 @@ public class GraphDatabaseSettings implements LoadableConfig
     public static final Setting<Long> tx_state_off_heap_max_cacheable_block_size = buildSetting(
             "dbms.tx_state.off_heap.max_cacheable_block_size", BYTES, "512k" )
             .constraint( min( kibiBytes( 4 ) ) )
-            .constraint( ( x, ignore ) ->
-            {
-                checkArgument( Long.bitCount( x ) == 1, "Value must be a power of 2: %d", x );
-                return x;
-            } )
+            .constraint( powerOf2() )
             .build();
 
     @Description( "Defines the size of the off-heap memory blocks cache. The cache will contain this number of blocks for each block size " +

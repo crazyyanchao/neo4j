@@ -6,12 +6,12 @@
   <parent>
       <groupId>org.neo4j</groupId>
       <artifactId>parent</artifactId>
-      <version>3.5.5-SNAPSHOT</version>
+      <version>3.5.9-SNAPSHOT</version>
       <relativePath>../..</relativePath>
   </parent>
 
   <artifactId>neo4j-fulltext-index</artifactId>
-  <version>3.5.5-SNAPSHOT</version>
+  <version>3.5.9-SNAPSHOT</version>
 
   <name>Neo4j - Fulltext index</name>
   <description>Fulltext index for neo4j</description>
@@ -63,6 +63,20 @@
 
         <!--Test dependencies-->
 
+        <dependency>
+            <groupId>org.neo4j</groupId>
+            <artifactId>neo4j-io</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.neo4j</groupId>
+            <artifactId>neo4j-common</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-migrationsupport</artifactId>
